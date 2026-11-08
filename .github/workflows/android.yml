@@ -1,0 +1,115 @@
+name: android
+
+# Builds the Bounce Arrows Android app (android/, with the web game packed inside).
+# - On every push to main and on pull requests: runs the level tests and builds the APK + Play bundle
+#   (download them from the run's artifacts).
+# - Run by hand (Actions > android > Run workflow): also publishes a GitHub release "Bounce Arrows 1.N"
+#   (tag app-N) with the APK, ready to install on a phone.
+#
+# Signing: add the repository secrets ARCHER_KEYSTORE (the .jks file, base64) and ARCHER_KEY_PASS so that every
+# build is signed with the same key and installs over the previous one. Without them a throwaway key is used:
+# the APK still installs, but the next build must be installed after uninstalling the old one.
+# Google Play: PLAY_UPLOAD_KEYSTORE_B64, PLAY_UPLOAD_STORE_PASS, PLAY_UPLOAD_KEY_PASS, PLAY_UPLOAD_KEY_ALIAS sign the .aab.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      notes:
+        description: "What's new in this version"
+        required: false
+        default: ""
+
+permissions:
+  contents: write
+
+concurrency:
+  group: android-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  apk:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Level tests (every level must be solvable)
+        run: node tests/levels.test.js
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "8.13"
+
+      - name: Pack the game into the app
+        run: |
+          mkdir -p android/app/src/main/assets/www
+          rsync -a --delete --exclude android --exclude tests --exclude .git --exclude .github --exclude '*.md' ./ android/app/src/main/assets/www/
+
+      - name: Signing key
+        env:
+          KEYSTORE: ${{ secrets.ARCHER_KEYSTORE }}
+          KEY_PASS: ${{ secrets.ARCHER_KEY_PASS }}
+        run: |
+          if [ -n "$KEYSTORE" ] && [ -n "$KEY_PASS" ]; then
+            echo "$KEYSTORE" | base64 -d > "$RUNNER_TEMP/archer.jks"
+            PASS="$KEY_PASS"
+          else
+            echo "::warning::No ARCHER_KEYSTORE secret: signing with a throwaway key. Uninstall the old app before installing the next build."
+            PASS=archerdemo
+            keytool -genkeypair -keystore "$RUNNER_TEMP/archer.jks" -alias archer -keyalg RSA -keysize 2048 -validity 10000 \
+              -storepass "$PASS" -keypass "$PASS" -dname "CN=Bounce Arrows"
+          fi
+          echo "ARCHER_KEYSTORE_FILE=$RUNNER_TEMP/archer.jks" >> "$GITHUB_ENV"
+          echo "ARCHER_STORE_PASS=$PASS" >> "$GITHUB_ENV"
+          echo "ARCHER_KEY_PASS=$PASS" >> "$GITHUB_ENV"
+          echo "ARCHER_KEY_ALIAS=archer" >> "$GITHUB_ENV"
+
+      - name: Build the APK
+        run: gradle -p android assembleRelease -PversionCode=${{ github.run_number }} -PversionName=1.${{ github.run_number }} --no-daemon --console=plain
+
+      # The Play bundle uses the Play upload key when its secrets exist, otherwise the same key as the APK.
+      - name: Build the Play bundle
+        env:
+          PLAY_KEYSTORE_B64: ${{ secrets.PLAY_UPLOAD_KEYSTORE_B64 }}
+          PLAY_UPLOAD_STORE_PASS: ${{ secrets.PLAY_UPLOAD_STORE_PASS }}
+          PLAY_UPLOAD_KEY_PASS: ${{ secrets.PLAY_UPLOAD_KEY_PASS }}
+          PLAY_UPLOAD_KEY_ALIAS: ${{ secrets.PLAY_UPLOAD_KEY_ALIAS }}
+        run: |
+          if [ -n "$PLAY_KEYSTORE_B64" ]; then
+            echo "$PLAY_KEYSTORE_B64" | base64 -d > "$RUNNER_TEMP/upload.jks"
+            export ARCHER_KEYSTORE_FILE="$RUNNER_TEMP/upload.jks" ARCHER_STORE_PASS="$PLAY_UPLOAD_STORE_PASS" ARCHER_KEY_PASS="$PLAY_UPLOAD_KEY_PASS" ARCHER_KEY_ALIAS="${PLAY_UPLOAD_KEY_ALIAS:-upload}"
+          fi
+          gradle -p android bundleRelease -PversionCode=${{ github.run_number }} -PversionName=1.${{ github.run_number }} --no-daemon --console=plain
+
+      - name: Name the files
+        run: |
+          cp android/app/build/outputs/apk/release/app-release.apk BounceArrows-1.${{ github.run_number }}.apk
+          cp android/app/build/outputs/bundle/release/app-release.aab BounceArrows-1.${{ github.run_number }}-play.aab
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: BounceArrows-1.${{ github.run_number }}
+          path: |
+            BounceArrows-1.${{ github.run_number }}.apk
+            BounceArrows-1.${{ github.run_number }}-play.aab
+
+      - name: Publish the release
+        if: github.event_name == 'workflow_dispatch'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: app-${{ github.run_number }}
+          target_commitish: ${{ github.sha }}
+          name: Bounce Arrows 1.${{ github.run_number }}
+          body: ${{ github.event.inputs.notes || 'New version of Bounce Arrows.' }}
+          files: BounceArrows-1.${{ github.run_number }}.apk

@@ -1,0 +1,53 @@
+plugins {
+    id 'com.android.application'
+}
+
+// versionCode and versionName come from the CI workflow (-PversionCode=12 -PversionName=1.12)
+def vCode = (project.findProperty('versionCode') ?: '1') as int
+def vName = (project.findProperty('versionName') ?: '1.0') as String
+
+android {
+    namespace 'io.github.e1caro.bouncearrows'
+    compileSdk 36
+
+    defaultConfig {
+        applicationId 'io.github.e1caro.bouncearrows' // can never change once uploaded to Google Play
+        minSdk 24
+        targetSdk 36
+        versionCode vCode
+        versionName vName
+    }
+
+    // The keystore file and passwords come from environment variables, never from git.
+    // Without them the release is left unsigned (an unsigned APK can not be installed).
+    def env = { String k, String d = null -> System.getenv(k) ?: d }
+    signingConfigs {
+        release {
+            if (env('ARCHER_KEYSTORE_FILE')) storeFile file(env('ARCHER_KEYSTORE_FILE'))
+            storePassword env('ARCHER_STORE_PASS')
+            keyAlias env('ARCHER_KEY_ALIAS', 'archer')
+            keyPassword env('ARCHER_KEY_PASS')
+        }
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled false
+            if (env('ARCHER_KEYSTORE_FILE')) signingConfig signingConfigs.release
+        }
+    }
+
+    buildFeatures {
+        buildConfig true
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+}
+
+dependencies {
+    implementation 'androidx.webkit:webkit:1.11.0'
+    implementation 'androidx.core:core:1.13.1'
+}

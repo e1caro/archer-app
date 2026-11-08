@@ -47,7 +47,7 @@
 <script src="monetization.js"></script>
 <script src="game.js"></script>
 <script>
-  if ('serviceWorker' in navigator && location.protocol.startsWith('http')) navigator.serviceWorker.register('sw.js');
+  if ('serviceWorker' in navigator && location.protocol.startsWith('http') && !/BounceArrowsApp/.test(navigator.userAgent)) navigator.serviceWorker.register('sw.js');
 </script>
 </body>
 </html>
